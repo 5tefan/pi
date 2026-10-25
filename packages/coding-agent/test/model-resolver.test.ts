@@ -10,6 +10,7 @@ import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import {
 	defaultModelPerProvider,
+	findExactModelReferenceMatch,
 	findInitialModel,
 	type ModelReferenceRequest,
 	resolveCliModel,
@@ -115,6 +116,10 @@ const referenceCatalog = [
 	referenceModel("gw-b", "claude-opus-4-8"),
 	referenceModel("gw-b", "gw-b/free"),
 	referenceModel("gw-b", "zz:free"),
+	// Provider ids may contain "/" (URL-derived ids from extensions)
+	referenceModel("llama-server=http://127.0.0.1:8080", "unsloth/Qwen3.8-27B-GGUF:BF16"),
+	referenceModel("llama/server", "qwen2"),
+	referenceModel("llama", "server/qwen"),
 ];
 
 type ReferenceExpected =
@@ -178,6 +183,28 @@ const referenceCases: ReferenceCase[] = [
 	{ name: "none keeps the suffix in the id", text: "gpt-4o:high", thinkingSuffix: "none", expected: "not-found" },
 	{ name: "exact-only skips fuzzy matches", text: "sonnet", fuzzy: false, expected: "not-found" },
 	{ name: "empty text", text: "  ", expected: "not-found" },
+
+	// Provider ids containing "/" (URL-derived ids from extensions)
+	{
+		name: "provider id containing /",
+		text: "llama-server=http://127.0.0.1:8080/unsloth/Qwen3.8-27B-GGUF:BF16",
+		expected: { model: "llama-server=http://127.0.0.1:8080/unsloth/Qwen3.8-27B-GGUF:BF16" },
+	},
+	{
+		name: "provider id containing / with thinking suffix",
+		text: "llama-server=http://127.0.0.1:8080/unsloth/Qwen3.8-27B-GGUF:BF16:off",
+		expected: { model: "llama-server=http://127.0.0.1:8080/unsloth/Qwen3.8-27B-GGUF:BF16", thinkingLevel: "off" },
+	},
+	{
+		name: "longest provider prefix wins over a nested shorter one",
+		text: "llama/server/qwen2",
+		expected: { model: "llama/server/qwen2" },
+	},
+	{
+		name: "unknown model under a provider id containing / is not found",
+		text: "llama-server=http://127.0.0.1:8080/other/model",
+		expected: "not-found",
+	},
 
 	// Exact matches across providers
 	// #7327
@@ -332,6 +359,12 @@ describe("resolveModelReference", () => {
 				else expect(result.warning).toBeUndefined();
 			}
 		}
+	});
+	test("findExactModelReferenceMatch resolves provider ids containing /", () => {
+		const reference = "llama-server=http://127.0.0.1:8080/unsloth/Qwen3.8-27B-GGUF:BF16";
+		const match = findExactModelReferenceMatch(reference, referenceCatalog);
+		expect(match?.provider).toBe("llama-server=http://127.0.0.1:8080");
+		expect(match?.id).toBe("unsloth/Qwen3.8-27B-GGUF:BF16");
 	});
 });
 
@@ -680,6 +713,41 @@ describe("resolveCliModel", () => {
 			// :high is kept as part of the model id since --thinking was explicit
 			expect(result.model?.id).toBe("zai-org/GLM-5.1-FP8:high");
 			expect(result.thinkingLevel).toBeUndefined();
+		});
+	});
+
+	describe("provider ids containing / (URL-derived provider ids)", () => {
+		const llamaProvider = "llama-server=http://127.0.0.1:8080";
+		const llamaModel = {
+			...mockModels[0],
+			id: "unsloth/Qwen3.8-27B-GGUF:BF16",
+			provider: llamaProvider,
+		};
+		const registry = {
+			getModels: () => [llamaModel],
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
+
+		test("resolves provider/id without a thinking suffix", () => {
+			const result = resolveCliModel({
+				cliModel: `${llamaProvider}/unsloth/Qwen3.8-27B-GGUF:BF16`,
+				modelRuntime: registry,
+			});
+
+			expect(result.error).toBeUndefined();
+			expect(result.model?.provider).toBe(llamaProvider);
+			expect(result.model?.id).toBe("unsloth/Qwen3.8-27B-GGUF:BF16");
+		});
+
+		test("resolves provider/id with a thinking suffix", () => {
+			const result = resolveCliModel({
+				cliModel: `${llamaProvider}/unsloth/Qwen3.8-27B-GGUF:BF16:off`,
+				modelRuntime: registry,
+			});
+
+			expect(result.error).toBeUndefined();
+			expect(result.model?.provider).toBe(llamaProvider);
+			expect(result.model?.id).toBe("unsloth/Qwen3.8-27B-GGUF:BF16");
+			expect(result.thinkingLevel).toBe("off");
 		});
 	});
 });

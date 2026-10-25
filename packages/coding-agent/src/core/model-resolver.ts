@@ -128,13 +128,17 @@ function splitProviderPrefix(
 	text: string,
 	models: readonly Model<Api>[],
 ): { provider: string; modelText: string } | undefined {
-	const slashIndex = text.indexOf("/");
-	if (slashIndex === -1) return undefined;
-	const prefix = text.substring(0, slashIndex).trim().toLowerCase();
-	const modelText = text.substring(slashIndex + 1).trim();
-	if (!prefix || !modelText) return undefined;
-	const provider = models.find((model) => model.provider.toLowerCase() === prefix)?.provider;
-	return provider ? { provider, modelText } : undefined;
+	const lowerText = text.toLowerCase();
+	let provider: string | undefined;
+	for (const model of models) {
+		const candidate = model.provider;
+		if (candidate.length + 1 < lowerText.length && lowerText.startsWith(`${candidate.toLowerCase()}/`)) {
+			if (!provider || candidate.length > provider.length) provider = candidate;
+		}
+	}
+	if (!provider) return undefined;
+	const modelText = text.substring(provider.length + 1).trim();
+	return modelText ? { provider, modelText } : undefined;
 }
 
 /**
